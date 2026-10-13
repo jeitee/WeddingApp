@@ -1,0 +1,5 @@
+<resources>
+    <style name="Theme.WeddingApp" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#FAF7F2</item>
+    </style>
+</resources>
