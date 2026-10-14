@@ -9,12 +9,14 @@ import com.teejei.weddingapp.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = Repository(app.applicationContext)
+    private val sms = SmsNotifier(app.applicationContext)
     private fun <T> Flow<T>.state(init: T) = stateIn(viewModelScope, SharingStarted.Eagerly, init)
 
     val settings = repo.settings.flow.state(AppSettings())
@@ -34,12 +36,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val guestError = MutableStateFlow<String?>(null)
     val memoryError = MutableStateFlow<String?>(null)
     val importResult = MutableStateFlow<String?>(null)
+    val smsEnabled = sms.enabled.state(false)
+    val simId = sms.simId.state(-1)
+    fun loadSims(): List<SimOption> = sms.availableSims()
+    fun setSim(id: Int) = viewModelScope.launch { sms.setSimId(id); toast("SIM choice saved") }
+    val smsConfig = sms.config.state(MessageConfig())
+    val followUpSent = MutableStateFlow<Set<String>?>(null)   // tokens already sent the follow-up (null = loading)
+    val followUpBusy = MutableStateFlow<String?>(null)        // progress text while sending
 
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val messages = _messages.asSharedFlow()
     fun toast(m: String) { _messages.tryEmit(m) }
 
-    init { refresh() }
+    init {
+        refresh()
+        // While the app process is alive, re-check every 5 minutes so new confirmations are picked up (and texted).
+        viewModelScope.launch { while (true) { delay(5 * 60_000L); refresh() } }
+    }
 
     fun updateFilter(t: (GuestFilter) -> GuestFilter) = filter.update(t)
 
@@ -52,6 +65,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 val m = async { repo.refreshMemories() }
                 guestError.value = g.await().exceptionOrNull()?.friendly()
                 memoryError.value = m.await().exceptionOrNull()?.friendly()
+            }
+            if (guestError.value == null) {
+                sms.process(repo.guests.first()).onSuccess { n -> if (n > 0) toast("Sent $n SMS confirmation(s)") }
             }
             refreshing.value = false
         }
@@ -76,6 +92,90 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             },
             onFailure = { importResult.value = "Import failed: ${it.friendly()}" }
         )
+    }
+
+    fun setSmsEnabled(on: Boolean) = viewModelScope.launch {
+        sms.setEnabled(on, repo.guests.first()).fold(
+            onSuccess = { toast(if (on) "SMS confirmations on. Existing confirmations were tagged and won't be texted." else "SMS confirmations off") },
+            onFailure = { toast("Couldn't change the SMS setting: ${it.friendly()}") }
+        )
+    }
+
+    /* ---------- Manual December 1 follow-up ---------- */
+
+    fun saveSmsConfig(c: MessageConfig) = viewModelScope.launch {
+        sms.saveConfig(c)
+        toast("Message details saved")
+    }
+
+    fun followUpMessage(g: Guest) = sms.finalizeMessage(g, smsConfig.value)
+    fun hasValidNumber(g: Guest) = sms.hasValidNumber(g)
+
+    fun loadFollowUp() = viewModelScope.launch {
+        sms.followUpSentTokens().fold(
+            onSuccess = { followUpSent.value = it },
+            onFailure = { followUpSent.value = emptySet(); toast("Couldn't load follow-up status: ${it.friendly()}") }
+        )
+    }
+
+    fun sendFollowUps(targets: List<Guest>) = viewModelScope.launch {
+        if (followUpBusy.value != null || targets.isEmpty()) return@launch
+        var sent = 0; var already = 0; var failed = 0
+        targets.forEachIndexed { i, g ->
+            followUpBusy.value = "Sending ${i + 1} of ${targets.size}…"
+            sms.sendFollowUp(g).fold(
+                onSuccess = { ok ->
+                    if (ok) sent++ else already++
+                    followUpSent.value = (followUpSent.value ?: emptySet()) + g.token
+                },
+                onFailure = { failed++ }
+            )
+            if (i < targets.lastIndex) delay(3000L)   // space the texts out
+        }
+        followUpBusy.value = null
+        toast(buildString {
+            append("Follow-up: $sent sent")
+            if (already > 0) append(", $already already sent")
+            if (failed > 0) append(", $failed failed (will stay unsent)")
+        })
+    }
+
+    /* ---------- Manual confirmation texts ---------- */
+
+    val confirmPending = MutableStateFlow<Map<String, List<Int>>?>(null)   // token -> untexted confirmed seats (null = loading)
+    val confirmBusy = MutableStateFlow<String?>(null)
+
+    fun confirmationMessage(g: Guest) =
+        sms.confirmationMessage(g, confirmPending.value?.get(g.token).orEmpty(), smsConfig.value)
+
+    fun loadConfirmations() = viewModelScope.launch {
+        confirmPending.value = null
+        sms.unsentConfirmations(repo.guests.first()).fold(
+            onSuccess = { confirmPending.value = it },
+            onFailure = { confirmPending.value = emptyMap(); toast("Couldn't load confirmations: ${it.friendly()}") }
+        )
+    }
+
+    fun sendConfirmations(targets: List<Guest>) = viewModelScope.launch {
+        if (confirmBusy.value != null || targets.isEmpty()) return@launch
+        var sent = 0; var already = 0; var failed = 0
+        targets.forEachIndexed { i, g ->
+            confirmBusy.value = "Sending ${i + 1} of ${targets.size}…"
+            sms.sendConfirmation(g).fold(
+                onSuccess = { n ->
+                    if (n > 0) sent++ else already++
+                    confirmPending.value = confirmPending.value?.minus(g.token)
+                },
+                onFailure = { failed++ }
+            )
+            if (i < targets.lastIndex) delay(3000L)
+        }
+        confirmBusy.value = null
+        toast(buildString {
+            append("Confirmations: $sent sent")
+            if (already > 0) append(", $already already sent")
+            if (failed > 0) append(", $failed failed (will stay unsent)")
+        })
     }
 
     fun exportExcel(uri: Uri) = viewModelScope.launch {

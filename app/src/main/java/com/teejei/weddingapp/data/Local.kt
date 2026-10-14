@@ -16,6 +16,7 @@ object Defaults {
     // script.js (active API_URL)
     const val SCRIPT_URL =
         "https://script.google.com/macros/s/AKfycbzJf_kvU44TRztjZaYixK4EIX8wJq8Ate8SIC0NL7WGSA0mx0N1wQQ_9cptDoeL_vB-QA/exec"
+
     // qr-script.js
     const val SUPABASE_URL = "https://jwixdwokeguliuwbwbqs.supabase.co"
     const val ADMIN_KEY  = "iFoundJudithMariePerezLomibaoDeCelis022323"
