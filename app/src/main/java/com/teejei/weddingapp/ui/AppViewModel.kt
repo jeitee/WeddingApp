@@ -6,10 +6,12 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.teejei.weddingapp.data.*
 import com.teejei.weddingapp.model.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = Repository(app.applicationContext)
@@ -70,9 +72,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         repo.importExcel(uri).fold(
             onSuccess = {
                 importResult.value = "Imported ${it.imported} guest group(s) from “${it.sheet}”" +
-                    if (it.skippedNoToken > 0) " (${it.skippedNoToken} row(s) skipped: no token)." else "."
+                        if (it.skippedNoToken > 0) " (${it.skippedNoToken} row(s) skipped: no token)." else "."
             },
             onFailure = { importResult.value = "Import failed: ${it.friendly()}" }
+        )
+    }
+
+    fun exportExcel(uri: Uri) = viewModelScope.launch {
+        val result = withContext(Dispatchers.IO) {
+            runCatching { GuestExporter.export(getApplication(), uri, guests.value) }
+        }
+        result.fold(
+            onSuccess = { toast("Exported $it guest group(s) to Excel") },
+            onFailure = { toast("Export failed: ${it.friendly()}") }
         )
     }
 }

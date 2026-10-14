@@ -101,7 +101,7 @@ data class MediaEntity(
 )
 
 data class MediaRow(
-    val id: String, val type: String, val url: String, val name: String, val sizeMb: Double,
+    val id: String, val uploadId: String, val type: String, val url: String, val name: String, val sizeMb: Double,
     val createdAt: String, val uploader: String?, val message: String?
 )
 
@@ -133,9 +133,9 @@ abstract class WeddingDao {
     abstract fun countUploaders(): Flow<Int>
 
     @Query(
-        "SELECT m.id AS id, m.type AS type, m.url AS url, m.name AS name, m.sizeMb AS sizeMb, " +
-            "m.createdAt AS createdAt, u.uploader AS uploader, u.message AS message " +
-            "FROM media m LEFT JOIN uploads u ON u.id = m.uploadId ORDER BY m.createdAt DESC"
+        "SELECT m.id AS id, m.uploadId AS uploadId, m.type AS type, m.url AS url, m.name AS name, m.sizeMb AS sizeMb, " +
+                "m.createdAt AS createdAt, u.uploader AS uploader, u.message AS message " +
+                "FROM media m LEFT JOIN uploads u ON u.id = m.uploadId ORDER BY m.createdAt DESC"
     )
     abstract fun mediaRows(): Flow<List<MediaRow>>
 }

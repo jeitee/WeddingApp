@@ -6,7 +6,9 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.*
+import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -63,6 +65,8 @@ fun MemoriesScreen(vm: AppViewModel) {
     var query by remember { mutableStateOf("") }
     var menu by remember { mutableStateOf(false) }
     var viewing by remember { mutableStateOf<MediaRow?>(null) }
+    var listMode by remember { mutableStateOf(false) }
+    var openGroup by remember { mutableStateOf<String?>(null) }
 
     val uploaders = remember(media) { media.mapNotNull { it.uploader?.takeIf { s -> s.isNotBlank() } }.distinct().sorted() }
     val shown = remember(media, type, uploader, query) {
@@ -74,6 +78,13 @@ fun MemoriesScreen(vm: AppViewModel) {
                             (m.uploader?.contains(q, ignoreCase = true) == true) ||
                             (m.message?.contains(q, ignoreCase = true) == true) ||
                             m.name.contains(q, ignoreCase = true))
+        }
+    }
+
+    // One entry per upload (same uploader + message), newest first
+    val groups = remember(shown) {
+        shown.groupBy { it.uploadId }.map { (id, items) ->
+            UploadGroup(id, items.first().uploader?.ifBlank { null }, items.first().message?.ifBlank { null }, items)
         }
     }
 
@@ -92,6 +103,10 @@ fun MemoriesScreen(vm: AppViewModel) {
             Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically
         ) {
+            FilterChip(!listMode, { listMode = false }, { Text("Tiles") },
+                leadingIcon = { Icon(Icons.Filled.GridView, null, Modifier.size(18.dp)) })
+            FilterChip(listMode, { listMode = true }, { Text("List") },
+                leadingIcon = { Icon(Icons.AutoMirrored.Filled.ViewList, null, Modifier.size(18.dp)) })
             FilterChip(type == null, { type = null }, { Text("All (${media.size})") })
             FilterChip(type == "photo", { type = if (type == "photo") null else "photo" }, { Text("Photos (${stats.photos})") })
             FilterChip(type == "video", { type = if (type == "video") null else "video" }, { Text("Videos (${stats.videos})") })
@@ -115,6 +130,7 @@ fun MemoriesScreen(vm: AppViewModel) {
             }
             shown.isEmpty() -> EmptyState(Icons.Filled.SearchOff, "Nothing matches", "Try a different search, or change the type or uploader filter.",
                 "Clear filters") { query = ""; type = null; uploader = null }
+            listMode -> UploadList(groups, error, onRetry = { vm.refresh() }) { openGroup = it }
             else -> LazyVerticalGrid(
                 columns = GridCells.Adaptive(160.dp), contentPadding = PaddingValues(16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -128,11 +144,103 @@ fun MemoriesScreen(vm: AppViewModel) {
             }
         }
     }
+    // Tiled view of one upload; the viewer opens on top of it, so closing the viewer returns here
+    openGroup?.let { id ->
+        groups.firstOrNull { it.id == id }?.let { g ->
+            UploadDialog(g, onPick = { viewing = it }, onClose = { openGroup = null })
+        }
+    }
     viewing?.let { MediaViewer(it) { viewing = null } }
 }
 
+private data class UploadGroup(val id: String, val uploader: String?, val message: String?, val items: List<MediaRow>)
+
+private fun UploadGroup.summary(): String {
+    val photos = items.count { it.type != "video" }
+    val videos = items.count { it.type == "video" }
+    return listOfNotNull(
+        if (photos > 0) "$photos photo${if (photos == 1) "" else "s"}" else null,
+        if (videos > 0) "$videos video${if (videos == 1) "" else "s"}" else null
+    ).joinToString(" · ")
+}
+
 @Composable
-private fun MemoryTile(m: MediaRow, onClick: () -> Unit) {
+private fun UploadList(groups: List<UploadGroup>, error: String?, onRetry: () -> Unit, onOpen: (String) -> Unit) {
+    LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        error?.let { e -> item { ErrorBanner(e) { onRetry() } } }
+        item {
+            Text("${groups.size} upload${if (groups.size == 1) "" else "s"}", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        groups.forEach { g -> item(key = g.id) { UploadCard(g) { onOpen(g.id) } } }
+    }
+}
+
+@Composable
+private fun UploadCard(g: UploadGroup, onClick: () -> Unit) {
+    val first = g.items.first()
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(SurfaceWhite)
+            .clickable(onClick = onClick).padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.size(76.dp).clip(RoundedCornerShape(14.dp)).background(Color(0xFFE6EDE2))) {
+            AsyncImage(thumb(first), first.name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            if (first.type == "video") {
+                Icon(Icons.Filled.PlayCircle, null, Modifier.align(Alignment.Center).size(28.dp), tint = Color.White)
+            }
+            if (g.items.size > 1) {
+                Box(
+                    Modifier.align(Alignment.BottomEnd).padding(4.dp).clip(RoundedCornerShape(50))
+                        .background(Color(0xB3000000)).padding(horizontal = 7.dp, vertical = 2.dp)
+                ) { Text("${g.items.size}", color = Color.White, style = MaterialTheme.typography.labelSmall) }
+            }
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(g.uploader ?: "Unknown uploader", style = MaterialTheme.typography.titleMedium,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (g.message != null) Text(g.message, style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(listOfNotNull(g.summary(), formatTime(first.createdAt)).joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall, color = Artichoke)
+        }
+        Icon(Icons.Filled.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun UploadDialog(g: UploadGroup, onPick: (MediaRow) -> Unit, onClose: () -> Unit) {
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(
+            Modifier.padding(horizontal = 12.dp).fillMaxWidth().widthIn(max = 720.dp).heightIn(max = 720.dp),
+            shape = RoundedCornerShape(28.dp), color = Cream
+        ) {
+            Column {
+                Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 16.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.Top) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(g.uploader ?: "Unknown uploader", style = MaterialTheme.typography.titleLarge)
+                        if (g.message != null) Text(g.message, style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 4, overflow = TextOverflow.Ellipsis)
+                        Text(g.summary(), style = MaterialTheme.typography.labelLarge, color = Artichoke)
+                    }
+                    IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "Close") }
+                }
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(110.dp), modifier = Modifier.weight(1f, fill = false),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(g.items, key = { it.id }) { m -> MemoryTile(m, showCaption = false) { onPick(m) } }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MemoryTile(m: MediaRow, showCaption: Boolean = true, onClick: () -> Unit) {
     val who = m.uploader?.ifBlank { null }
     val msg = m.message?.ifBlank { null }
     Box(Modifier.aspectRatio(1f).clip(RoundedCornerShape(14.dp)).background(Color(0xFFE6EDE2)).clickable(onClick = onClick)) {
@@ -140,7 +248,7 @@ private fun MemoryTile(m: MediaRow, onClick: () -> Unit) {
         if (m.type == "video") {
             Icon(Icons.Filled.PlayCircle, "Video", Modifier.align(Alignment.Center).size(40.dp), tint = Color.White)
         }
-        if (who != null || msg != null) {
+        if (showCaption && (who != null || msg != null)) {
             Column(
                 Modifier.align(Alignment.BottomStart).fillMaxWidth()
                     .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xE6000000))))

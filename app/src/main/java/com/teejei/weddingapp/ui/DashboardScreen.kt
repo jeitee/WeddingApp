@@ -2,8 +2,16 @@ package com.teejei.weddingapp.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -13,11 +21,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.teejei.weddingapp.model.Guest
 import com.teejei.weddingapp.model.formatMillis
 
 private val TrackGray = Color(0xFFE3E7DF)
@@ -31,7 +45,14 @@ fun DashboardScreen(vm: AppViewModel) {
     val gErr by vm.guestError.collectAsStateWithLifecycle()
     val mErr by vm.memoryError.collectAsStateWithLifecycle()
     val refreshing by vm.refreshing.collectAsStateWithLifecycle()
+    val guests by vm.guests.collectAsStateWithLifecycle()
+    var listFor by remember { mutableStateOf<String?>(null) }
     val full: LazyGridItemSpanScope.() -> GridItemSpan = { GridItemSpan(maxLineSpan) }
+
+    when (listFor) {
+        "attending" -> NamesDialog("Confirmed to attend", "attending", guests, Artichoke) { listFor = null }
+        "not_attending" -> NamesDialog("Declined", "not_attending", guests, Rose) { listFor = null }
+    }
 
     LazyVerticalGrid(
         columns = GridCells.Adaptive(340.dp), modifier = Modifier.fillMaxSize(),
@@ -68,8 +89,8 @@ fun DashboardScreen(vm: AppViewModel) {
                         centerTop = "${gs.groups}", centerBottom = "groups"
                     )
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        LegendRow(Artichoke, "Confirmed", "${gs.confirmedGroups}")
-                        LegendRow(Rose, "Declined", "${gs.declinedGroups}")
+                        LegendRow(Artichoke, "Confirmed", "${gs.confirmedGroups}") { listFor = "attending" }
+                        LegendRow(Rose, "Declined", "${gs.declinedGroups}") { listFor = "not_attending" }
                         LegendRow(Gold, "Awaiting", "${gs.awaitingGroups}")
                     }
                 }
@@ -147,12 +168,122 @@ private fun DonutChart(slices: List<Pair<Float, Color>>, centerTop: String, cent
 }
 
 @Composable
-private fun LegendRow(color: Color, label: String, value: String) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+private fun LegendRow(color: Color, label: String, value: String, onClick: (() -> Unit)? = null) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
         Box(Modifier.size(12.dp).clip(CircleShape).background(color))
         Spacer(Modifier.width(8.dp))
         Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
         Text(value, style = MaterialTheme.typography.titleSmall)
+        if (onClick != null) Icon(Icons.Filled.ChevronRight, null, Modifier.size(18.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun NamesDialog(title: String, attending: String, guests: List<Guest>, accent: Color, onDismiss: () -> Unit) {
+    val groups = remember(guests, attending) {
+        guests.mapNotNull { g ->
+            val names = g.seats.filter { it.attending == attending }.map { it.name.ifBlank { "Unnamed guest" } }
+            if (names.isEmpty()) null else g.groupName.ifBlank { "(unnamed group)" } to names
+        }.sortedWith(compareBy({ it.first.startsWith("(unnamed") }, { it.first.lowercase() }))
+    }
+    val total = groups.sumOf { it.second.size }
+    var query by remember { mutableStateOf("") }
+    val q = query.trim()
+    val filtered = remember(groups, q) {
+        if (q.isEmpty()) groups
+        else groups.mapNotNull { (group, names) ->
+            if (group.contains(q, ignoreCase = true)) group to names
+            else names.filter { it.contains(q, ignoreCase = true) }.takeIf { it.isNotEmpty() }?.let { group to it }
+        }
+    }
+    val headerIcon = if (attending == "attending") Icons.Filled.CheckCircle else Icons.Filled.Cancel
+
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(
+            Modifier.padding(horizontal = 20.dp).fillMaxWidth().widthIn(max = 480.dp).heightIn(max = 620.dp),
+            shape = RoundedCornerShape(28.dp), color = SurfaceWhite, tonalElevation = 6.dp
+        ) {
+            Column {
+                // Header
+                Box(Modifier.fillMaxWidth().background(Brush.horizontalGradient(listOf(accent, accent.copy(alpha = 0.72f))))) {
+                    Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 18.dp, bottom = 18.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(44.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.22f)),
+                            contentAlignment = Alignment.Center) {
+                            Icon(headerIcon, null, tint = Color.White, modifier = Modifier.size(26.dp))
+                        }
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(title, color = Color.White, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                            Text("$total ${if (total == 1) "person" else "people"} · ${groups.size} ${if (groups.size == 1) "group" else "groups"}",
+                                color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.bodySmall)
+                        }
+                        IconButton(onClick = onDismiss) { Icon(Icons.Filled.Close, "Close", tint = Color.White) }
+                    }
+                }
+
+                if (groups.isEmpty()) {
+                    Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                        Text("No names recorded yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                } else {
+                    OutlinedTextField(
+                        value = query, onValueChange = { query = it },
+                        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp),
+                        singleLine = true, placeholder = { Text("Search name or group") },
+                        leadingIcon = { Icon(Icons.Filled.Search, null) },
+                        trailingIcon = {
+                            if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Filled.Close, "Clear search") }
+                        },
+                        shape = RoundedCornerShape(16.dp)
+                    )
+                    if (filtered.isEmpty()) {
+                        Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                            Text("No matches.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    } else LazyColumn(
+                        Modifier.weight(1f, fill = false),
+                        contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        filtered.forEach { (group, names) ->
+                            item {
+                                Column(
+                                    Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Cream).padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(group, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                        Box(Modifier.clip(RoundedCornerShape(50)).background(accent.copy(alpha = 0.16f))
+                                            .padding(horizontal = 10.dp, vertical = 3.dp)) {
+                                            Text("${names.size}", color = accent, style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                    names.forEach { n ->
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Box(Modifier.size(32.dp).clip(CircleShape).background(accent.copy(alpha = 0.18f)),
+                                                contentAlignment = Alignment.Center) {
+                                                Text(n.trim().firstOrNull()?.uppercase() ?: "?", color = accent,
+                                                    style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                                            }
+                                            Spacer(Modifier.width(12.dp))
+                                            Text(n, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
