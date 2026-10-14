@@ -15,16 +15,17 @@ import kotlinx.coroutines.flow.map
 object Defaults {
     // script.js (active API_URL)
     const val SCRIPT_URL =
-        "https://script.google.com/macros/s/AKfycbwrF5mrRJkyyZ582_GtBIW8X-fSBxHnBZoLRG0YZFBn8vQzz2VRNyjoWRVYZLtmuRbbUA/exec"
+        "https://script.google.com/macros/s/AKfycbzJf_kvU44TRztjZaYixK4EIX8wJq8Ate8SIC0NL7WGSA0mx0N1wQQ_9cptDoeL_vB-QA/exec"
     // qr-script.js
     const val SUPABASE_URL = "https://jwixdwokeguliuwbwbqs.supabase.co"
+    const val ADMIN_KEY  = "iFoundJudithMariePerezLomibaoDeCelis022323"
     const val SUPABASE_KEY = "sb_publishable_LN5IZzt80pI20i8W4kT-4g_BkEEKlss"
     const val EVENT_ID = "teejei-judith"
 }
 
 data class AppSettings(
     val scriptUrl: String = Defaults.SCRIPT_URL,
-    val adminKey: String = "",
+    val adminKey: String = Defaults.ADMIN_KEY,
     val supabaseUrl: String = Defaults.SUPABASE_URL,
     val supabaseKey: String = Defaults.SUPABASE_KEY,
     val eventId: String = Defaults.EVENT_ID,
@@ -45,7 +46,7 @@ class SettingsStore(private val ctx: Context) {
 
     private fun Preferences.toSettings() = AppSettings(
         scriptUrl = this[kScript] ?: Defaults.SCRIPT_URL,
-        adminKey = this[kAdmin] ?: "",
+        adminKey = this[kAdmin] ?: Defaults.ADMIN_KEY,
         supabaseUrl = this[kSbUrl] ?: Defaults.SUPABASE_URL,
         supabaseKey = this[kSbKey] ?: Defaults.SUPABASE_KEY,
         eventId = this[kEvent] ?: Defaults.EVENT_ID,

@@ -2,10 +2,13 @@ package com.teejei.weddingapp.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -14,9 +17,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
@@ -30,6 +40,9 @@ import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import com.teejei.weddingapp.data.MediaRow
 import com.teejei.weddingapp.model.formatTime
+
+private const val MIN_ZOOM = 1f
+private const val MAX_ZOOM = 5f
 
 private fun isCloudinary(u: String) = u.contains("res.cloudinary.com") && u.contains("/upload/")
 private fun thumb(m: MediaRow): String = when {
@@ -47,15 +60,34 @@ fun MemoriesScreen(vm: AppViewModel) {
     val refreshing by vm.refreshing.collectAsStateWithLifecycle()
     var type by remember { mutableStateOf<String?>(null) }
     var uploader by remember { mutableStateOf<String?>(null) }
+    var query by remember { mutableStateOf("") }
     var menu by remember { mutableStateOf(false) }
     var viewing by remember { mutableStateOf<MediaRow?>(null) }
 
     val uploaders = remember(media) { media.mapNotNull { it.uploader?.takeIf { s -> s.isNotBlank() } }.distinct().sorted() }
-    val shown = remember(media, type, uploader) {
-        media.filter { (type == null || it.type == type) && (uploader == null || it.uploader == uploader) }
+    val shown = remember(media, type, uploader, query) {
+        val q = query.trim()
+        media.filter { m ->
+            (type == null || m.type == type) &&
+                    (uploader == null || m.uploader == uploader) &&
+                    (q.isEmpty() ||
+                            (m.uploader?.contains(q, ignoreCase = true) == true) ||
+                            (m.message?.contains(q, ignoreCase = true) == true) ||
+                            m.name.contains(q, ignoreCase = true))
+        }
     }
 
     Column(Modifier.fillMaxSize()) {
+        OutlinedTextField(
+            value = query, onValueChange = { query = it },
+            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp),
+            singleLine = true, placeholder = { Text("Search uploader or message") },
+            leadingIcon = { Icon(Icons.Filled.Search, null) },
+            trailingIcon = {
+                if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Filled.Close, "Clear search") }
+            },
+            shape = RoundedCornerShape(16.dp)
+        )
         Row(
             Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically
@@ -81,20 +113,18 @@ fun MemoriesScreen(vm: AppViewModel) {
                     "Photos and videos uploaded by guests will appear here. If you know uploads exist, the Supabase read policy may be missing (see README).",
                     "Refresh") { vm.refresh() }
             }
-            shown.isEmpty() -> EmptyState(Icons.Filled.SearchOff, "Nothing matches", "Change the type or uploader filter.")
+            shown.isEmpty() -> EmptyState(Icons.Filled.SearchOff, "Nothing matches", "Try a different search, or change the type or uploader filter.",
+                "Clear filters") { query = ""; type = null; uploader = null }
             else -> LazyVerticalGrid(
-                columns = GridCells.Adaptive(120.dp), contentPadding = PaddingValues(16.dp),
+                columns = GridCells.Adaptive(160.dp), contentPadding = PaddingValues(16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 error?.let { e -> item(span = { GridItemSpan(maxLineSpan) }) { ErrorBanner(e) { vm.refresh() } } }
-                items(shown, key = { it.id }) { m ->
-                    Box(Modifier.aspectRatio(1f).clip(RoundedCornerShape(14.dp)).background(Color(0xFFE6EDE2)).clickable { viewing = m }) {
-                        AsyncImage(thumb(m), m.name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                        if (m.type == "video") {
-                            Icon(Icons.Filled.PlayCircle, "Video", Modifier.align(Alignment.Center).size(40.dp), tint = Color.White)
-                        }
-                    }
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Text("${shown.size} of ${media.size} memories", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+                items(shown, key = { it.id }) { m -> MemoryTile(m) { viewing = m } }
             }
         }
     }
@@ -102,26 +132,102 @@ fun MemoriesScreen(vm: AppViewModel) {
 }
 
 @Composable
+private fun MemoryTile(m: MediaRow, onClick: () -> Unit) {
+    val who = m.uploader?.ifBlank { null }
+    val msg = m.message?.ifBlank { null }
+    Box(Modifier.aspectRatio(1f).clip(RoundedCornerShape(14.dp)).background(Color(0xFFE6EDE2)).clickable(onClick = onClick)) {
+        AsyncImage(thumb(m), m.name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        if (m.type == "video") {
+            Icon(Icons.Filled.PlayCircle, "Video", Modifier.align(Alignment.Center).size(40.dp), tint = Color.White)
+        }
+        if (who != null || msg != null) {
+            Column(
+                Modifier.align(Alignment.BottomStart).fillMaxWidth()
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xE6000000))))
+                    .padding(start = 8.dp, end = 8.dp, top = 20.dp, bottom = 8.dp)
+            ) {
+                if (who != null) Text(who, color = Color.White, style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (msg != null) Text(msg, color = Color.White, style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
+@Composable
 private fun MediaViewer(m: MediaRow, onClose: () -> Unit) {
     val ctx = LocalContext.current
+    var scale by remember(m.id) { mutableFloatStateOf(1f) }
+    var offset by remember(m.id) { mutableStateOf(Offset.Zero) }
+    var box by remember { mutableStateOf(IntSize.Zero) }
+    val isVideo = m.type == "video"
+
+    fun clamp(o: Offset, s: Float): Offset {
+        val maxX = box.width * (s - 1f) / 2f
+        val maxY = box.height * (s - 1f) / 2f
+        return Offset(o.x.coerceIn(-maxX, maxX), o.y.coerceIn(-maxY, maxY))
+    }
+    fun zoomTo(s: Float) {
+        val ns = s.coerceIn(MIN_ZOOM, MAX_ZOOM)
+        scale = ns
+        offset = if (ns <= MIN_ZOOM) Offset.Zero else clamp(offset, ns)
+    }
+
+    val who = m.uploader?.ifBlank { null } ?: "Unknown uploader"
+    val message = m.message?.ifBlank { null }
+
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize(), color = Color(0xFF111611)) {
             Column(Modifier.fillMaxSize().systemBarsPadding()) {
                 Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "Close", tint = Color.White) }
                     Spacer(Modifier.weight(1f))
+                    if (!isVideo) {
+                        IconButton(enabled = scale > MIN_ZOOM, onClick = { zoomTo(scale / 1.5f) }) {
+                            Icon(Icons.Filled.ZoomOut, "Zoom out", tint = if (scale > MIN_ZOOM) Color.White else Color(0xFF6B756A))
+                        }
+                        IconButton(enabled = scale < MAX_ZOOM, onClick = { zoomTo(scale * 1.5f) }) {
+                            Icon(Icons.Filled.ZoomIn, "Zoom in", tint = if (scale < MAX_ZOOM) Color.White else Color(0xFF6B756A))
+                        }
+                    }
                     IconButton(onClick = { shareText(ctx, m.url) }) { Icon(Icons.Filled.Share, "Share link", tint = Color.White) }
                     IconButton(onClick = { openUrl(ctx, m.url) {} }) { Icon(Icons.Filled.OpenInBrowser, "Open in browser", tint = Color.White) }
                 }
-                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    if (m.type == "video") VideoPlayer(m.url)
-                    else AsyncImage(fullImage(m), m.name, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                Box(
+                    Modifier.weight(1f).fillMaxWidth().onSizeChanged { box = it },
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (isVideo) VideoPlayer(m.url)
+                    else AsyncImage(
+                        fullImage(m), m.name,
+                        Modifier.fillMaxSize()
+                            .pointerInput(m.id) {
+                                detectTapGestures(onDoubleTap = { if (scale > MIN_ZOOM) zoomTo(MIN_ZOOM) else zoomTo(2.5f) })
+                            }
+                            .pointerInput(m.id) {
+                                detectTransformGestures { _, pan, zoom, _ ->
+                                    val ns = (scale * zoom).coerceIn(MIN_ZOOM, MAX_ZOOM)
+                                    scale = ns
+                                    offset = if (ns <= MIN_ZOOM) Offset.Zero else clamp(offset + pan, ns)
+                                }
+                            }
+                            .graphicsLayer {
+                                scaleX = scale; scaleY = scale
+                                translationX = offset.x; translationY = offset.y
+                            },
+                        contentScale = ContentScale.Fit
+                    )
                 }
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(m.uploader?.ifBlank { null } ?: "Unknown uploader", color = Color.White, style = MaterialTheme.typography.titleMedium)
-                    if (!m.message.isNullOrBlank()) Text(m.message, color = Color(0xFFDDE5D8))
+                Column(
+                    Modifier.fillMaxWidth().heightIn(max = 220.dp).verticalScroll(rememberScrollState()).padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(who, color = Color.White, style = MaterialTheme.typography.titleLarge)
+                    if (message != null) Text(message, color = Color.White, style = MaterialTheme.typography.bodyLarge)
                     Text(listOfNotNull(m.name.ifBlank { null }, if (m.sizeMb > 0) "${m.sizeMb} MB" else null, formatTime(m.createdAt))
                         .joinToString(" · "), color = Color(0xFFB8C2B3), style = MaterialTheme.typography.bodySmall)
+                    if (!isVideo) Text("Pinch or double-tap to zoom", color = Color(0xFF8A958A), style = MaterialTheme.typography.labelSmall)
                 }
             }
         }

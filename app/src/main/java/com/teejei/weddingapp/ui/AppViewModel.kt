@@ -23,7 +23,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val inviteStats = guests.map { it.inviteStats() }.state(InviteStats())
 
     val filter = MutableStateFlow(GuestFilter())
-    val visibleGuests = combine(guests, filter) { g, f -> g.applyFilter(f) }.state(emptyList())
+    val visibleGuests = combine(guests, filter) { g, f ->
+        // Stable sort: unnamed groups go last, selected sort order is kept within each part
+        g.applyFilter(f).sortedBy { it.groupName.isBlank() }
+    }.state(emptyList())
 
     val refreshing = MutableStateFlow(false)
     val guestError = MutableStateFlow<String?>(null)
