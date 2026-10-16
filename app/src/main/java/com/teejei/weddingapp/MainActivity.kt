@@ -2,9 +2,11 @@ package com.teejei.weddingapp
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -27,12 +29,30 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.*
 import com.teejei.weddingapp.ui.*
+import kotlinx.coroutines.runBlocking
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        setContent { WeddingTheme { AppRoot() } }
+        // Read the saved theme choice before the first frame so the app does not flash the wrong theme.
+        val initialMode = runBlocking { ThemePrefs.get(applicationContext) }
+        setContent {
+            val mode by remember { ThemePrefs.flow(applicationContext) }.collectAsStateWithLifecycle(initialValue = initialMode)
+            val dark = when (mode) {
+                ThemeMode.DARK -> true
+                ThemeMode.LIGHT -> false
+                ThemeMode.SYSTEM -> isSystemInDarkTheme()
+            }
+            // Keep the status bar / navigation bar icons readable on the chosen theme (not just the phone's own setting).
+            DisposableEffect(dark) {
+                val clear = android.graphics.Color.TRANSPARENT
+                val style = if (dark) SystemBarStyle.dark(clear) else SystemBarStyle.light(clear, clear)
+                enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
+                onDispose { }
+            }
+            WeddingTheme(dark) { AppRoot() }
+        }
     }
 }
 

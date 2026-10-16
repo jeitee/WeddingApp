@@ -41,6 +41,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun loadSims(): List<SimOption> = sms.availableSims()
     fun setSim(id: Int) = viewModelScope.launch { sms.setSimId(id); toast("SIM choice saved") }
     val smsConfig = sms.config.state(MessageConfig())
+    val backgroundOn = SyncPrefs.enabled(app.applicationContext).state(false)
+    val syncMinutes = SyncPrefs.minutesFlow(app.applicationContext).state(2)
+    fun setSyncMinutes(m: Int) = viewModelScope.launch {
+        SyncPrefs.setMinutes(getApplication<Application>().applicationContext, m)
+        toast("Checking every $m minute(s)")
+    }
+    fun setBackground(on: Boolean) = viewModelScope.launch {
+        val c = getApplication<Application>().applicationContext
+        SyncPrefs.set(c, on)
+        if (on) SyncService.start(c) else SyncService.stop(c)
+        toast(if (on) "Background sync on" else "Background sync off")
+    }
     val followUpSent = MutableStateFlow<Set<String>?>(null)   // tokens already sent the follow-up (null = loading)
     val followUpBusy = MutableStateFlow<String?>(null)        // progress text while sending
 
@@ -50,8 +62,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         refresh()
-        // While the app process is alive, re-check every 5 minutes so new confirmations are picked up (and texted).
-        viewModelScope.launch { while (true) { delay(5 * 60_000L); refresh() } }
+        // While the app is open, re-check every few minutes (Settings: 1, 2 or 5) so new confirmations are picked up (and texted).
+        // (When Background sync is on, the service does this instead, so it keeps going while minimized.)
+        viewModelScope.launch {
+            val c = getApplication<Application>().applicationContext
+            while (true) { delay(SyncPrefs.minutes(c) * 60_000L); if (!SyncService.running.value) refresh() }
+        }
+        // If the user turned Background sync on earlier and the service is not running (phone restarted, app killed), restart it.
+        viewModelScope.launch {
+            val c = getApplication<Application>().applicationContext
+            if (SyncPrefs.isEnabled(c) && !SyncService.running.value) SyncService.start(c)
+        }
     }
 
     fun updateFilter(t: (GuestFilter) -> GuestFilter) = filter.update(t)
@@ -173,6 +194,51 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         confirmBusy.value = null
         toast(buildString {
             append("Confirmations: $sent sent")
+            if (already > 0) append(", $already already sent")
+            if (failed > 0) append(", $failed failed (will stay unsent)")
+        })
+    }
+
+    /* ---------- Decline notices (automatic switch + manual list) ---------- */
+
+    val declineEnabled = sms.declineEnabled.state(false)
+    val declinePending = MutableStateFlow<Map<String, List<Int>>?>(null)   // token -> untexted declined seats (null = loading)
+    val declineBusy = MutableStateFlow<String?>(null)
+
+    fun setDeclineEnabled(on: Boolean) = viewModelScope.launch {
+        sms.setDeclineEnabled(on, repo.guests.first()).fold(
+            onSuccess = { toast(if (on) "Decline notices on. Existing declines were tagged and won't be texted." else "Decline notices off") },
+            onFailure = { toast("Couldn't change the setting: ${it.friendly()}") }
+        )
+    }
+
+    fun declineMessage(g: Guest) = sms.declineMessage(g, declinePending.value?.get(g.token).orEmpty(), smsConfig.value)
+
+    fun loadDeclines() = viewModelScope.launch {
+        declinePending.value = null
+        sms.unsentDeclines(repo.guests.first()).fold(
+            onSuccess = { declinePending.value = it },
+            onFailure = { declinePending.value = emptyMap(); toast("Couldn't load declines: ${it.friendly()}") }
+        )
+    }
+
+    fun sendDeclines(targets: List<Guest>) = viewModelScope.launch {
+        if (declineBusy.value != null || targets.isEmpty()) return@launch
+        var sent = 0; var already = 0; var failed = 0
+        targets.forEachIndexed { i, g ->
+            declineBusy.value = "Sending ${i + 1} of ${targets.size}…"
+            sms.sendDecline(g).fold(
+                onSuccess = { n ->
+                    if (n > 0) sent++ else already++
+                    declinePending.value = declinePending.value?.minus(g.token)
+                },
+                onFailure = { failed++ }
+            )
+            if (i < targets.lastIndex) delay(3000L)
+        }
+        declineBusy.value = null
+        toast(buildString {
+            append("Decline notices: $sent sent")
             if (already > 0) append(", $already already sent")
             if (failed > 0) append(", $failed failed (will stay unsent)")
         })

@@ -83,7 +83,8 @@ fun MemoriesScreen(vm: AppViewModel) {
 
     // One entry per upload (same uploader + message), newest first
     val groups = remember(shown) {
-        shown.groupBy { it.uploadId }.map { (id, items) ->
+        // Files without an upload id each get their own entry instead of merging into one
+        shown.groupBy { it.uploadId.ifBlank { it.id } }.map { (id, items) ->
             UploadGroup(id, items.first().uploader?.ifBlank { null }, items.first().message?.ifBlank { null }, items)
         }
     }
@@ -184,7 +185,7 @@ private fun UploadCard(g: UploadGroup, onClick: () -> Unit) {
             .clickable(onClick = onClick).padding(12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(Modifier.size(76.dp).clip(RoundedCornerShape(14.dp)).background(Color(0xFFE6EDE2))) {
+        Box(Modifier.size(76.dp).clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.secondaryContainer)) {
             AsyncImage(thumb(first), first.name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             if (first.type == "video") {
                 Icon(Icons.Filled.PlayCircle, null, Modifier.align(Alignment.Center).size(28.dp), tint = Color.White)
@@ -243,7 +244,7 @@ private fun UploadDialog(g: UploadGroup, onPick: (MediaRow) -> Unit, onClose: ()
 private fun MemoryTile(m: MediaRow, showCaption: Boolean = true, onClick: () -> Unit) {
     val who = m.uploader?.ifBlank { null }
     val msg = m.message?.ifBlank { null }
-    Box(Modifier.aspectRatio(1f).clip(RoundedCornerShape(14.dp)).background(Color(0xFFE6EDE2)).clickable(onClick = onClick)) {
+    Box(Modifier.aspectRatio(1f).clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.secondaryContainer).clickable(onClick = onClick)) {
         AsyncImage(thumb(m), m.name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         if (m.type == "video") {
             Icon(Icons.Filled.PlayCircle, "Video", Modifier.align(Alignment.Center).size(40.dp), tint = Color.White)

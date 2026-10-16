@@ -61,6 +61,7 @@ fun formatLongDate(d: LocalDate): String = d.format(DateTimeFormatter.ofPattern(
  */
 class SmsNotifier(private val ctx: Context) {
     private val kEnabled = booleanPreferencesKey("enabled")
+    private val kDecline = booleanPreferencesKey("decline_enabled")
     private val kSubId = intPreferencesKey("sim_sub_id")
     private val mutex = Mutex()
     private val gson = Gson()
@@ -83,6 +84,7 @@ class SmsNotifier(private val ctx: Context) {
     }
 
     val enabled: Flow<Boolean> = ctx.smsDs.data.map { it[kEnabled] ?: false }
+    val declineEnabled: Flow<Boolean> = ctx.smsDs.data.map { it[kDecline] ?: false }
     val simId: Flow<Int> = ctx.smsDs.data.map { it[kSubId] ?: -1 }
     suspend fun setSimId(id: Int) { ctx.smsDs.edit { it[kSubId] = id } }
 
@@ -110,15 +112,33 @@ class SmsNotifier(private val ctx: Context) {
     }
 
     companion object {
-        // Android warns about / blocks apps that send more than ~30 SMS parts in 30 minutes. The app checks every
-        // 5 minutes, so automatic confirmation texts use at most 5 parts per check to stay safely under that limit.
-        private const val PART_BUDGET = 5
+        // Android asks for confirmation (and may block) when an app sends more than ~30 SMS parts in 30 minutes.
+        // Every text this app sends is recorded here; automatic sending stops at WINDOW_CAP parts per rolling 30 minutes
+        // and the rest waits for a later check. This lets quick checks (every 1-2 minutes) stay real-time without a burst
+        // of confirmations ever crossing the limit.
+        private const val WINDOW_CAP = 28
+        private const val WINDOW_MS = 30 * 60_000L
+        private val sentLog = ArrayDeque<Pair<Long, Int>>()
+        private val sentLock = Any()
+
+        private fun partsLeft(): Int = synchronized(sentLock) {
+            val cutoff = System.currentTimeMillis() - WINDOW_MS
+            while (sentLog.isNotEmpty() && sentLog.first().first < cutoff) sentLog.removeFirst()
+            (WINDOW_CAP - sentLog.sumOf { it.second }).coerceAtLeast(0)
+        }
+
+        private fun recordParts(n: Int) = synchronized(sentLock) { sentLog.addLast(System.currentTimeMillis() to n) }
+
+        /** Last sheet tags we read. If every confirmed/declined seat is already tagged there, a check needs no extra request. */
+        @Volatile private var tagCache: State? = null
+        private const val KIND_DECLINED = "declined"
     }
 
     fun hasPermission() =
         ContextCompat.checkSelfPermission(ctx, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED
 
     private fun confirmed(g: Guest) = g.seats.filter { it.attending == "attending" }.sortedBy { it.seatNo }
+    private fun declined(g: Guest) = g.seats.filter { it.attending == "not_attending" }.sortedBy { it.seatNo }
 
     /* ---------- Apps Script calls (blocking; always run on Dispatchers.IO) ---------- */
 
@@ -137,23 +157,24 @@ class SmsNotifier(private val ctx: Context) {
     private fun parseSeats(s: String?): Set<Int> =
         s.orEmpty().split(",").mapNotNull { it.trim().removePrefix("s").removePrefix("S").toIntOrNull() }.toSet()
 
-    private class State(val tags: Map<String, Set<Int>>, val finalized: Set<String>)
+    private class State(val tags: Map<String, Set<Int>>, val declinedTags: Map<String, Set<Int>>, val finalized: Set<String>)
 
     private fun fetchState(s: AppSettings): State {
         val o = call(s, mapOf("action" to "admin_sms_list"))
         val tags = o.getAsJsonObject("tags")?.entrySet()?.associate { (k, v) -> k to parseSeats(v.asString) } ?: emptyMap()
+        val declinedTags = o.getAsJsonObject("declined_tags")?.entrySet()?.associate { (k, v) -> k to parseSeats(v.asString) } ?: emptyMap()
         val finalized = o.getAsJsonObject("finalized")?.keySet()?.toSet() ?: emptySet()
-        return State(tags, finalized)
+        return State(tags, declinedTags, finalized)
     }
 
     /** Tags the seats that are not tagged yet and returns only those. */
-    private fun claim(s: AppSettings, token: String, seats: List<Int>): List<Int> {
-        val o = call(s, mapOf("action" to "admin_sms_seats", "mode" to "claim", "token" to token, "seats" to seats))
+    private fun claim(s: AppSettings, token: String, seats: List<Int>, kind: String = "confirmed"): List<Int> {
+        val o = call(s, mapOf("action" to "admin_sms_seats", "mode" to "claim", "kind" to kind, "token" to token, "seats" to seats))
         return o.getAsJsonArray("seats")?.map { it.asInt }.orEmpty()
     }
 
-    private fun release(s: AppSettings, token: String, seats: List<Int>) {
-        runCatching { call(s, mapOf("action" to "admin_sms_seats", "mode" to "release", "token" to token, "seats" to seats)) }
+    private fun release(s: AppSettings, token: String, seats: List<Int>, kind: String = "confirmed") {
+        runCatching { call(s, mapOf("action" to "admin_sms_seats", "mode" to "release", "kind" to kind, "token" to token, "seats" to seats)) }
     }
 
     private fun claimFinalize(s: AppSettings, token: String): Boolean {
@@ -184,30 +205,75 @@ class SmsNotifier(private val ctx: Context) {
         }
     }
 
-    /** AUTOMATIC confirmation texts. Returns how many SMS messages were sent. */
+    /** Same idea for decline notices: turning on tags seats that already declined (without texting), so no backlog is sent. */
+    suspend fun setDeclineEnabled(on: Boolean, guests: List<Guest>): Result<Unit> = mutex.withLock {
+        runCatching {
+            if (on) withContext(Dispatchers.IO) {
+                val s = SettingsStore(ctx).current()
+                val state = fetchState(s)
+                for (g in guests) {
+                    val untagged = declined(g).map { it.seatNo }.filter { it !in (state.declinedTags[g.token] ?: emptySet()) }
+                    if (untagged.isNotEmpty()) claim(s, g.token, untagged, KIND_DECLINED)
+                }
+            }
+            ctx.smsDs.edit { it[kDecline] = on }
+            Unit
+        }
+    }
+
+    /** AUTOMATIC texts (confirmations and/or decline notices, each with its own switch). Returns how many SMS messages were sent. */
     suspend fun process(guests: List<Guest>): Result<Int> = mutex.withLock {
         runCatching {
-            if (ctx.smsDs.data.first()[kEnabled] != true || !hasPermission()) return@runCatching 0
+            val prefs = ctx.smsDs.data.first()
+            val confOn = prefs[kEnabled] == true
+            val decOn = prefs[kDecline] == true
+            if ((!confOn && !decOn) || !hasPermission()) return@runCatching 0
             withContext(Dispatchers.IO) {
                 val s = SettingsStore(ctx).current()
-                val state = fetchState(s)   // if this fails nothing is sent
+                val cached = tagCache
+                val needFetch = cached == null || guests.any { g ->
+                    (confOn && confirmed(g).any { it.seatNo !in (cached.tags[g.token] ?: emptySet()) }) ||
+                            (decOn && declined(g).any { it.seatNo !in (cached.declinedTags[g.token] ?: emptySet()) })
+                }
+                val state = if (needFetch) fetchState(s).also { tagCache = it } else cached!!   // if the fetch fails nothing is sent
                 val cfg = currentConfig()
                 var sent = 0
-                var parts = 0
-                seatLoop@ for (g in guests) {
-                    val fresh = confirmed(g).filter { it.seatNo !in (state.tags[g.token] ?: emptySet()) }
-                    if (fresh.isEmpty()) continue
-                    val number = normalizePh(g.contact) ?: continue
-                    val need = partsOf(compose(g, fresh.map { displayName(it.name) }, cfg))
-                    if (parts > 0 && parts + need > PART_BUDGET) break@seatLoop
-                    val claimed = try { claim(s, g.token, fresh.map { it.seatNo }) } catch (e: Exception) { break@seatLoop }
-                    if (claimed.isEmpty()) continue            // another phone already texted these
-                    val toSend = fresh.filter { it.seatNo in claimed }
-                    try {
-                        parts += send(number, compose(g, toSend.map { displayName(it.name) }, cfg))
-                        sent++
-                    } catch (e: Exception) {
-                        release(s, g.token, claimed)            // un-tag so it is retried on the next check
+                if (confOn) {
+                    seatLoop@ for (g in guests) {
+                        val fresh = confirmed(g).filter { it.seatNo !in (state.tags[g.token] ?: emptySet()) }
+                        if (fresh.isEmpty()) continue
+                        val number = normalizePh(g.contact) ?: continue
+                        val need = partsOf(compose(g, fresh.map { displayName(it.name) }, cfg))
+                        if (need > partsLeft()) break@seatLoop
+                        val claimed = try { claim(s, g.token, fresh.map { it.seatNo }) } catch (e: Exception) { break@seatLoop }
+                        tagCache = null
+                        if (claimed.isEmpty()) continue            // another phone already texted these
+                        val toSend = fresh.filter { it.seatNo in claimed }
+                        try {
+                            send(number, compose(g, toSend.map { displayName(it.name) }, cfg))
+                            sent++
+                        } catch (e: Exception) {
+                            release(s, g.token, claimed)            // un-tag so it is retried on the next check
+                        }
+                    }
+                }
+                if (decOn) {
+                    declineLoop@ for (g in guests) {
+                        val fresh = declined(g).filter { it.seatNo !in (state.declinedTags[g.token] ?: emptySet()) }
+                        if (fresh.isEmpty()) continue
+                        val number = normalizePh(g.contact) ?: continue
+                        val need = partsOf(composeDecline(g, fresh.map { displayName(it.name) }, cfg))
+                        if (need > partsLeft()) break@declineLoop
+                        val claimed = try { claim(s, g.token, fresh.map { it.seatNo }, KIND_DECLINED) } catch (e: Exception) { break@declineLoop }
+                        tagCache = null
+                        if (claimed.isEmpty()) continue
+                        val toSend = fresh.filter { it.seatNo in claimed }
+                        try {
+                            send(number, composeDecline(g, toSend.map { displayName(it.name) }, cfg))
+                            sent++
+                        } catch (e: Exception) {
+                            release(s, g.token, claimed, KIND_DECLINED)
+                        }
                     }
                 }
                 sent
@@ -288,6 +354,48 @@ class SmsNotifier(private val ctx: Context) {
         }
     }
 
+    /* ---------- MANUAL decline notices ---------- */
+
+    /** Declined seats per group token that were not texted yet (read from the sheet). */
+    suspend fun unsentDeclines(guests: List<Guest>): Result<Map<String, List<Int>>> = runCatching {
+        withContext(Dispatchers.IO) {
+            val state = fetchState(SettingsStore(ctx).current())
+            guests.mapNotNull { g ->
+                val fresh = declined(g).map { it.seatNo }.filter { it !in (state.declinedTags[g.token] ?: emptySet()) }
+                if (fresh.isEmpty()) null else g.token to fresh
+            }.toMap()
+        }
+    }
+
+    fun declineMessage(g: Guest, seatNos: List<Int>, cfg: MessageConfig): String {
+        val names = declined(g).filter { it.seatNo in seatNos }.map { displayName(it.name) }
+        return composeDecline(g, names.ifEmpty { listOf("a guest") }, cfg)
+    }
+
+    /** Texts one group's untexted declined seats. Returns how many seats were covered (0 = already texted). */
+    suspend fun sendDecline(g: Guest): Result<Int> = mutex.withLock {
+        runCatching {
+            check(hasPermission()) { "SMS permission is not granted." }
+            val number = normalizePh(g.contact) ?: error("No valid contact number.")
+            withContext(Dispatchers.IO) {
+                val s = SettingsStore(ctx).current()
+                val cfg = currentConfig()
+                val all = declined(g)
+                if (all.isEmpty()) return@withContext 0
+                val claimed = claim(s, g.token, all.map { it.seatNo }, KIND_DECLINED)
+                if (claimed.isEmpty()) return@withContext 0
+                val toSend = all.filter { it.seatNo in claimed }
+                try {
+                    send(number, composeDecline(g, toSend.map { displayName(it.name) }, cfg))
+                    toSend.size
+                } catch (e: Exception) {
+                    release(s, g.token, claimed, KIND_DECLINED)
+                    throw e
+                }
+            }
+        }
+    }
+
     private fun displayName(n: String) = n.trim().ifBlank { "a guest" }
 
     private fun seatsText(n: Int) = if (n == 1) "1 seat" else "$n seats"
@@ -303,10 +411,29 @@ class SmsNotifier(private val ctx: Context) {
         val confirmed = g.confirmedSeats.toInt()
         val open = (total - confirmed - g.declinedSeats.toInt()).coerceAtLeast(0)
         return buildString {
-            append("Hi ${g.groupName.trim().ifBlank { "there" }}! Thank you for confirming $who for our wedding on ${formatLongDate(cfg.weddingDate)}. ")
-            if (open > 0) append("You still have ${seatsText(open)} open - you can add more names on your invitation link. ")
-            else if (confirmed >= total && total > 0) append("All ${seatsText(total)} are now confirmed. ")
-            append("With love, ${cfg.couple}")
+            append("Hi ${g.groupName.trim().ifBlank { "there" }}!\n")
+            append("Thank you for confirming $who for our wedding on ${formatLongDate(cfg.weddingDate)}.\n")
+            if (open > 0) append("You still have ${seatsText(open)} open - you can add more names on your invitation link.\n")
+            else if (confirmed >= total && total > 0) append("All ${seatsText(total)} are now confirmed.\n")
+            append("\nWith love,\n${cfg.couple}")
+        }
+    }
+
+    private fun composeDecline(g: Guest, names: List<String>, cfg: MessageConfig): String {
+        val who = when (names.size) {
+            1 -> names[0]
+            2 -> "${names[0]} and ${names[1]}"
+            else -> names.dropLast(1).joinToString(", ") + " and " + names.last()
+        }
+        val total = g.maxPax.toInt()
+        val open = (total - g.confirmedSeats.toInt() - g.declinedSeats.toInt()).coerceAtLeast(0)
+        return buildString {
+            append("Hi ${g.groupName.trim().ifBlank { "there" }}!\n")
+            append("We received your reply: $who will not be able to join us on ${formatLongDate(cfg.weddingDate)}. ")
+            append("We will miss them, but thank you for letting us know.\n")
+            if (open > 0) append("You still have ${seatsText(open)} waiting for your reply on your invitation link.\n")
+            else append("If anything changes, you can update your reply on your invitation link.\n")
+            append("\nWith love,\n${cfg.couple}")
         }
     }
 
@@ -314,14 +441,25 @@ class SmsNotifier(private val ctx: Context) {
         val total = g.maxPax.toInt()
         val confirmed = g.confirmedSeats.toInt()
         val open = (total - confirmed - g.declinedSeats.toInt()).coerceAtLeast(0)
+        val by = cfg.finalizeBy?.let { " by ${formatLongDate(it)}" }.orEmpty()
         return buildString {
-            append("Hi ${g.groupName.trim().ifBlank { "there" }}! Our wedding is on ${formatLongDate(cfg.weddingDate)}, and we are now finalizing the guest list. ")
-            append("Please open your invitation link and confirm or decline each seat reserved for you")
-            cfg.finalizeBy?.let { append(" by ${formatLongDate(it)}") }
-            append(". ")
-            append("So far, $confirmed of ${seatsText(total)} confirmed")
-            if (open > 0) append(", $open still waiting for your reply")
-            append(". Thank you! With love, ${cfg.couple}")
+            append("Hi ${g.groupName.trim().ifBlank { "there" }}!\n")
+            append("We are so excited to celebrate with you on ${formatLongDate(cfg.weddingDate)}.\n\n")
+            when {
+                total <= 0 ->
+                    append("We are finalizing our guest list. Please open your invitation link and confirm or decline your seats$by.\n")
+                open > 0 -> {
+                    append("We are finalizing our guest list. Please open your invitation link and confirm or decline ")
+                    append(if (open == 1) "the 1 seat" else "the $open seats")
+                    append(" still waiting for your reply$by.\n")
+                    if (confirmed > 0) append("So far, $confirmed of ${seatsText(total)} confirmed.\n")
+                }
+                else -> {
+                    append("We are finalizing our guest list and you have answered all ${seatsText(total)}, thank you!\n")
+                    append("If anything changes, please update it on your invitation link$by.\n")
+                }
+            }
+            append("\nWith love,\n${cfg.couple}")
         }
     }
 
@@ -348,6 +486,7 @@ class SmsNotifier(private val ctx: Context) {
         val parts = sm.divideMessage(body)
         if (parts.size > 1) sm.sendMultipartTextMessage(number, null, parts, null, null)
         else sm.sendTextMessage(number, null, body, null, null)
+        recordParts(parts.size)
         return parts.size
     }
 

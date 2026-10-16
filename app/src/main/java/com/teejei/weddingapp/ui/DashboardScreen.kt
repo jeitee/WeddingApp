@@ -34,7 +34,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.teejei.weddingapp.model.Guest
 import com.teejei.weddingapp.model.formatMillis
 
-private val TrackGray = Color(0xFFE3E7DF)
+// Empty part of the charts / bars: light gray in the light theme, deep green-gray in the dark theme.
+private val TrackGray: Color get() = if (ThemeState.dark) Color(0xFF353E32) else Color(0xFFE3E7DF)
 
 @Composable
 fun DashboardScreen(vm: AppViewModel) {
