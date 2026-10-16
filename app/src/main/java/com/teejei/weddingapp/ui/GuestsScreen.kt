@@ -29,6 +29,10 @@ fun shareText(ctx: Context, text: String) {
     ctx.startActivity(Intent.createChooser(send, "Share invitation"))
 }
 
+fun rsvpMessage(url: String): String =
+    "$url\n\n\nYour presence would make our wedding day even more special. " +
+            "Kindly RSVP through the link above as soon as you’re able. 🤍"
+
 fun openUrl(ctx: Context, url: String, onFail: () -> Unit) {
     try { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
     catch (e: ActivityNotFoundException) { onFail() }
@@ -159,6 +163,9 @@ private fun GuestCard(g: Guest, vm: AppViewModel, onMark: () -> Unit) {
                 Icon(Icons.Filled.ContentCopy, "Copy invitation URL")
             }
             IconButton(enabled = usable, onClick = { shareText(ctx, g.url) }) { Icon(Icons.Filled.Share, "Share invitation URL") }
+            IconButton(enabled = usable, onClick = { shareText(ctx, rsvpMessage(g.url)) }) {
+                Icon(Icons.Filled.Chat, "Share RSVP message")
+            }
             IconButton(enabled = usable, onClick = { openUrl(ctx, g.url) { vm.toast("No browser found") } }) {
                 Icon(Icons.Filled.OpenInBrowser, "Open invitation in browser")
             }
@@ -199,7 +206,7 @@ private fun SentDialog(g: Guest, onDismiss: () -> Unit, onConfirm: (Boolean, Str
                         placeholder = { Text("e.g. sent via Messenger") })
                 } else {
                     Text("This clears the sent record for ${g.groupName}" +
-                        (formatTime(g.sentAt)?.let { " (marked sent $it)" } ?: "") + ".")
+                            (formatTime(g.sentAt)?.let { " (marked sent $it)" } ?: "") + ".")
                 }
             }
         },
