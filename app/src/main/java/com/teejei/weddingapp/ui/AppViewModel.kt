@@ -29,7 +29,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val filter = MutableStateFlow(GuestFilter())
     val visibleGuests = combine(guests, filter) { g, f ->
         // Stable sort: unnamed groups go last, selected sort order is kept within each part
-        g.applyFilter(f).sortedBy { it.groupName.isBlank() }
+        // The RSVP chip is applied here by seat counts (a group can have confirmed, declined and awaiting
+        // seats at once), so applyFilter() is called with the RSVP part cleared.
+        g.applyFilter(f.copy(rsvp = null))
+            .filter { guest ->
+                when (f.rsvp) {
+                    null -> true
+                    Rsvp.CONFIRMED -> guest.confirmedSeats > 0
+                    Rsvp.DECLINED -> guest.declinedSeats > 0
+                    Rsvp.AWAITING -> guest.awaitingSeats > 0
+                }
+            }
+            .sortedBy { it.groupName.isBlank() }
     }.state(emptyList())
 
     val refreshing = MutableStateFlow(false)

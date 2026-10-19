@@ -37,9 +37,56 @@ import com.teejei.weddingapp.model.formatMillis
 // Empty part of the charts / bars: light gray in the light theme, deep green-gray in the dark theme.
 private val TrackGray: Color get() = if (ThemeState.dark) Color(0xFF353E32) else Color(0xFFE3E7DF)
 
+private const val ATTENDING = "attending"
+private const val NOT_ATTENDING = "not_attending"
+
+/* ---------------------------------------------------------------------------------------------
+ * RSVP summary: one place that counts seats (people) and groups, derived from the guest list.
+ *
+ * Seats  : every seat is attending / not attending / awaiting (anything else).
+ * Groups : a group counts as
+ *            - attending     if at least one of its seats is attending
+ *            - not attending if it has no attending seat and every seat declined
+ *            - awaiting      otherwise
+ * ------------------------------------------------------------------------------------------- */
+private data class RsvpSummary(
+    val seatsAttending: Int = 0,
+    val seatsNotAttending: Int = 0,
+    val seatsAwaiting: Int = 0,
+    // A group counts under every status it has at least one seat in, so these can overlap.
+    val groupsAttending: Int = 0,
+    val groupsNotAttending: Int = 0,
+    val groupsAwaiting: Int = 0,
+    val groups: Int = 0,
+) {
+    val seats get() = seatsAttending + seatsNotAttending + seatsAwaiting
+}
+
+private fun summarize(guests: List<Guest>): RsvpSummary {
+    var sa = 0; var sn = 0; var sw = 0
+    var ga = 0; var gn = 0; var gw = 0; var gt = 0
+    guests.forEach { g ->
+        var a = 0; var n = 0; var w = 0
+        g.seats.forEach { s ->
+            when (s.attending) {
+                ATTENDING -> a++
+                NOT_ATTENDING -> n++
+                else -> w++
+            }
+        }
+        sa += a; sn += n; sw += w
+        if (a + n + w > 0) {
+            gt++
+            if (a > 0) ga++
+            if (n > 0) gn++
+            if (w > 0) gw++
+        }
+    }
+    return RsvpSummary(sa, sn, sw, ga, gn, gw, gt)
+}
+
 @Composable
 fun DashboardScreen(vm: AppViewModel) {
-    val gs by vm.guestStats.collectAsStateWithLifecycle()
     val inv by vm.inviteStats.collectAsStateWithLifecycle()
     val mem by vm.memoryStats.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
@@ -47,12 +94,13 @@ fun DashboardScreen(vm: AppViewModel) {
     val mErr by vm.memoryError.collectAsStateWithLifecycle()
     val refreshing by vm.refreshing.collectAsStateWithLifecycle()
     val guests by vm.guests.collectAsStateWithLifecycle()
+    val rsvp = remember(guests) { summarize(guests) }
     var listFor by remember { mutableStateOf<String?>(null) }
     val full: LazyGridItemSpanScope.() -> GridItemSpan = { GridItemSpan(maxLineSpan) }
 
     when (listFor) {
-        "attending" -> NamesDialog("Confirmed to attend", "attending", guests, Artichoke) { listFor = null }
-        "not_attending" -> NamesDialog("Declined", "not_attending", guests, Rose) { listFor = null }
+        ATTENDING -> NamesDialog("Confirmed to attend", ATTENDING, guests, Artichoke) { listFor = null }
+        NOT_ATTENDING -> NamesDialog("Declined", NOT_ATTENDING, guests, Rose) { listFor = null }
     }
 
     LazyVerticalGrid(
@@ -75,37 +123,56 @@ fun DashboardScreen(vm: AppViewModel) {
         gErr?.let { e -> item(span = full) { ErrorBanner("Guests: $e") { vm.refresh() } } }
         mErr?.let { e -> item(span = full) { ErrorBanner("Memories: $e") { vm.refresh() } } }
 
-        // RSVP donut chart
+        // Attendance counters: people (seats) attending / not attending, with their groups
+        item(span = full) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                CounterCard(
+                    label = "Attending", accent = Artichoke,
+                    seats = rsvp.seatsAttending, groups = rsvp.groupsAttending,
+                    modifier = Modifier.weight(1f)
+                ) { listFor = ATTENDING }
+                CounterCard(
+                    label = "Not attending", accent = Rose,
+                    seats = rsvp.seatsNotAttending, groups = rsvp.groupsNotAttending,
+                    modifier = Modifier.weight(1f)
+                ) { listFor = NOT_ATTENDING }
+            }
+        }
+
+        // RSVP charts
         item {
             SoftCard {
                 Text("RSVP overview", style = MaterialTheme.typography.titleMedium)
+
+                Text("People (${rsvp.seats} invited)", style = MaterialTheme.typography.labelLarge)
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                     DonutChart(
                         slices = listOf(
-                            gs.confirmedGroups.toFloat() to Artichoke,
-                            gs.declinedGroups.toFloat() to Rose,
-                            gs.awaitingGroups.toFloat() to Gold
+                            rsvp.seatsAttending.toFloat() to Artichoke,
+                            rsvp.seatsNotAttending.toFloat() to Rose,
+                            rsvp.seatsAwaiting.toFloat() to Gold
                         ),
-                        centerTop = "${gs.groups}", centerBottom = "groups"
+                        centerTop = "${rsvp.seats}", centerBottom = "people"
                     )
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        LegendRow(Artichoke, "Confirmed", "${gs.confirmedGroups}") { listFor = "attending" }
-                        LegendRow(Rose, "Declined", "${gs.declinedGroups}") { listFor = "not_attending" }
-                        LegendRow(Gold, "Awaiting", "${gs.awaitingGroups}")
+                        LegendRow(Artichoke, "Attending", "${rsvp.seatsAttending}") { listFor = ATTENDING }
+                        LegendRow(Rose, "Not attending", "${rsvp.seatsNotAttending}") { listFor = NOT_ATTENDING }
+                        LegendRow(Gold, "Awaiting", "${rsvp.seatsAwaiting}")
                     }
                 }
+
                 HorizontalDivider()
-                Text("Seats (${gs.seats} invited)", style = MaterialTheme.typography.labelLarge)
-                StackedBar(
-                    listOf(
-                        gs.confirmedSeats.toFloat() to Artichoke,
-                        gs.declinedSeats.toFloat() to Rose,
-                        gs.awaitingSeats.toFloat() to Gold
-                    )
+
+                Text("Groups (${rsvp.groups} total)", style = MaterialTheme.typography.labelLarge)
+                val gt = rsvp.groups.toFloat()
+                ProgressRow("Attending", rsvp.groupsAttending.toFloat(), gt, Artichoke)
+                ProgressRow("Not attending", rsvp.groupsNotAttending.toFloat(), gt, Rose)
+                ProgressRow("Awaiting", rsvp.groupsAwaiting.toFloat(), gt, Gold)
+                Text(
+                    "A group appears under each status it has people in, so rows can add up to more than ${rsvp.groups}.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Text("${gs.confirmedSeats} confirmed · ${gs.declinedSeats} declined · ${gs.awaitingSeats} awaiting",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
 
@@ -139,6 +206,28 @@ fun DashboardScreen(vm: AppViewModel) {
     }
 }
 
+/** Big tappable counter: number of people, with the number of groups they belong to underneath. */
+@Composable
+private fun CounterCard(
+    label: String, accent: Color, seats: Int, groups: Int,
+    modifier: Modifier = Modifier, onClick: () -> Unit
+) {
+    SoftCard(modifier = modifier.clip(RoundedCornerShape(20.dp)).clickable(onClick = onClick)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(10.dp).clip(CircleShape).background(accent))
+            Spacer(Modifier.width(8.dp))
+            Text(label, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+            Icon(Icons.Filled.ChevronRight, null, Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Text("$seats", color = accent, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold)
+        Text(
+            "${if (seats == 1) "person" else "people"} · $groups ${if (groups == 1) "group" else "groups"}",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
 @Composable
 private fun DonutChart(slices: List<Pair<Float, Color>>, centerTop: String, centerBottom: String) {
     val total = slices.sumOf { it.first.toDouble() }.toFloat()
@@ -150,11 +239,14 @@ private fun DonutChart(slices: List<Pair<Float, Color>>, centerTop: String, cent
             val topLeft = Offset(inset, inset)
             drawArc(TrackGray, 0f, 360f, false, topLeft, arcSize, style = Stroke(stroke))
             if (total > 0f) {
+                val visible = slices.count { it.first > 0f }
                 var start = -90f
                 slices.forEach { (v, c) ->
                     if (v > 0f) {
                         val sweep = v / total * 360f
-                        drawArc(c, start, (sweep - 2f).coerceAtLeast(0.5f), false, topLeft, arcSize,
+                        // Only leave a gap between slices when there is more than one
+                        val gap = if (visible > 1) 2f else 0f
+                        drawArc(c, start, (sweep - gap).coerceAtLeast(0.5f), false, topLeft, arcSize,
                             style = Stroke(stroke, cap = StrokeCap.Butt))
                         start += sweep
                     }
@@ -203,7 +295,7 @@ private fun NamesDialog(title: String, attending: String, guests: List<Guest>, a
             else names.filter { it.contains(q, ignoreCase = true) }.takeIf { it.isNotEmpty() }?.let { group to it }
         }
     }
-    val headerIcon = if (attending == "attending") Icons.Filled.CheckCircle else Icons.Filled.Cancel
+    val headerIcon = if (attending == ATTENDING) Icons.Filled.CheckCircle else Icons.Filled.Cancel
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(

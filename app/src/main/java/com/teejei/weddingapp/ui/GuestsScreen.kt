@@ -130,11 +130,10 @@ private fun GuestCard(g: Guest, vm: AppViewModel, onMark: () -> Unit) {
             Icon(if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore, null)
         }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            when (g.rsvp) {
-                Rsvp.CONFIRMED -> StatusChip("Confirmed", Artichoke)
-                Rsvp.DECLINED -> StatusChip("Declined", Rose)
-                Rsvp.AWAITING -> StatusChip("Awaiting", Gold)
-            }
+            // One chip per status the group has people in (a group can have several at once)
+            if (g.confirmedSeats > 0) StatusChip("Confirmed ${g.confirmedSeats}", Artichoke)
+            if (g.declinedSeats > 0) StatusChip("Declined ${g.declinedSeats}", Rose)
+            if (g.awaitingSeats > 0) StatusChip("Awaiting ${g.awaitingSeats}", Gold)
             StatusChip(if (g.invitationSent) "Sent" else "Not sent", if (g.invitationSent) Artichoke else Gold)
             StatusChip(if (g.opened) "Opened" else "Not opened", if (g.opened) Artichoke else Color(0xFF8A8A80))
             if (g.pendingSync) StatusChip("Sync pending", Rose)
