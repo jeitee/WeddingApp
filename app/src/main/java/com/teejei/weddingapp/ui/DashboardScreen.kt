@@ -39,6 +39,7 @@ private val TrackGray: Color get() = if (ThemeState.dark) Color(0xFF353E32) else
 
 private const val ATTENDING = "attending"
 private const val NOT_ATTENDING = "not_attending"
+private const val MAX_SEATS = 150
 
 /* ---------------------------------------------------------------------------------------------
  * RSVP summary: one place that counts seats (people) and groups, derived from the guest list.
@@ -60,6 +61,7 @@ private data class RsvpSummary(
     val groups: Int = 0,
 ) {
     val seats get() = seatsAttending + seatsNotAttending + seatsAwaiting
+    val seatsAvailable get() = (MAX_SEATS - seatsAttending).coerceAtLeast(0)
 }
 
 private fun summarize(guests: List<Guest>): RsvpSummary {
@@ -144,21 +146,22 @@ fun DashboardScreen(vm: AppViewModel) {
             SoftCard {
                 Text("RSVP overview", style = MaterialTheme.typography.titleMedium)
 
-                Text("People (${rsvp.seats} invited)", style = MaterialTheme.typography.labelLarge)
+                Text("Seats ($MAX_SEATS max · ${rsvp.seats} invited)", style = MaterialTheme.typography.labelLarge)
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                     DonutChart(
                         slices = listOf(
                             rsvp.seatsAttending.toFloat() to Artichoke,
-                            rsvp.seatsNotAttending.toFloat() to Rose,
                             rsvp.seatsAwaiting.toFloat() to Gold
                         ),
-                        centerTop = "${rsvp.seats}", centerBottom = "people"
+                        centerTop = "${rsvp.seatsAvailable}", centerBottom = "seats left",
+                        capacity = MAX_SEATS.toFloat()
                     )
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         LegendRow(Artichoke, "Attending", "${rsvp.seatsAttending}") { listFor = ATTENDING }
-                        LegendRow(Rose, "Not attending", "${rsvp.seatsNotAttending}") { listFor = NOT_ATTENDING }
                         LegendRow(Gold, "Awaiting", "${rsvp.seatsAwaiting}")
+                        LegendRow(TrackGray, "Available", "${rsvp.seatsAvailable}")
+                        LegendRow(Rose, "Not attending", "${rsvp.seatsNotAttending}") { listFor = NOT_ATTENDING }
                     }
                 }
 
@@ -228,9 +231,16 @@ private fun CounterCard(
     }
 }
 
+/**
+ * Donut chart. When [capacity] is set, the ring represents that many seats and any unfilled part
+ * shows as the gray track (= available). If the slices exceed the capacity, the ring scales to them.
+ */
 @Composable
-private fun DonutChart(slices: List<Pair<Float, Color>>, centerTop: String, centerBottom: String) {
-    val total = slices.sumOf { it.first.toDouble() }.toFloat()
+private fun DonutChart(
+    slices: List<Pair<Float, Color>>, centerTop: String, centerBottom: String,
+    capacity: Float = 0f
+) {
+    val total = maxOf(slices.sumOf { it.first.toDouble() }.toFloat(), capacity)
     Box(Modifier.size(140.dp), contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
             val stroke = 22.dp.toPx()

@@ -47,6 +47,30 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val guestError = MutableStateFlow<String?>(null)
     val memoryError = MutableStateFlow<String?>(null)
     val importResult = MutableStateFlow<String?>(null)
+
+    /* ---------- App updates ---------- */
+
+    val updateInfo = MutableStateFlow<UpdateInfo?>(null)      // non-null = a newer version is available
+    val updateStatus = MutableStateFlow<String?>(null)        // message after a manual check
+    val checkingUpdate = MutableStateFlow(false)
+
+    fun checkForUpdate(manual: Boolean = false) {
+        if (checkingUpdate.value) return
+        viewModelScope.launch {
+            checkingUpdate.value = true
+            UpdateChecker.check(getApplication<Application>().applicationContext).fold(
+                onSuccess = {
+                    updateInfo.value = it
+                    updateStatus.value = if (it == null && manual) "You're on the latest version." else null
+                },
+                onFailure = {
+                    if (manual) updateStatus.value = "Couldn't check for updates: ${it.friendly()}"
+                }
+            )
+            checkingUpdate.value = false
+        }
+    }
+
     val smsEnabled = sms.enabled.state(false)
     val simId = sms.simId.state(-1)
     fun loadSims(): List<SimOption> = sms.availableSims()
@@ -73,6 +97,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         refresh()
+        checkForUpdate()
         // While the app is open, re-check every few minutes (Settings: 1, 2 or 5) so new confirmations are picked up (and texted).
         // (When Background sync is on, the service does this instead, so it keeps going while minimized.)
         viewModelScope.launch {

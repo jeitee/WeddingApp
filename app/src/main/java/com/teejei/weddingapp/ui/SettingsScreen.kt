@@ -42,6 +42,7 @@ fun SettingsScreen(vm: AppViewModel) {
     val saved by vm.settings.collectAsStateWithLifecycle()
     val refreshing by vm.refreshing.collectAsStateWithLifecycle()
     val importResult by vm.importResult.collectAsStateWithLifecycle()
+    val updateInfo by vm.updateInfo.collectAsStateWithLifecycle()
     val guests by vm.guests.collectAsStateWithLifecycle()
     var script by remember(saved) { mutableStateOf(saved.scriptUrl) }
     var key by remember(saved) { mutableStateOf(saved.adminKey) }
@@ -261,6 +262,14 @@ fun SettingsScreen(vm: AppViewModel) {
                         "battery mode to Unrestricted / No restrictions in the system App info page.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+        }
+
+        SettingsSection(
+            Icons.Filled.SystemUpdate, "App updates",
+            updateInfo?.let { "New version ${it.versionName} available" } ?: "Check for a newer version",
+            expanded == "update", { flip("update") }
+        ) {
+            UpdateContent(vm)
         }
 
         SettingsSection(Icons.Filled.Storage, "Data and Excel", "Synced: ${formatMillis(saved.lastGuestSync) ?: "never"}", expanded == "data", { flip("data") }) {
