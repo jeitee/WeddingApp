@@ -112,7 +112,7 @@ fun DashboardScreen(vm: AppViewModel) {
     ) {
         item(span = full) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Teejei & Judith", style = MaterialTheme.typography.headlineMedium)
+                Text("Teejei & Judith Marie", style = MaterialTheme.typography.headlineMedium)
                 Text("December 20, 2026", color = Artichoke, style = MaterialTheme.typography.labelLarge)
                 val g = formatMillis(settings.lastGuestSync); val m = formatMillis(settings.lastMemorySync)
                 Text(
