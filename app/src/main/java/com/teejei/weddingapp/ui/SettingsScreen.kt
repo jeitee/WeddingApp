@@ -49,6 +49,9 @@ fun SettingsScreen(vm: AppViewModel) {
     var sbUrl by remember(saved) { mutableStateOf(saved.supabaseUrl) }
     var sbKey by remember(saved) { mutableStateOf(saved.supabaseKey) }
     var event by remember(saved) { mutableStateOf(saved.eventId) }
+    val seatSaved by vm.seatingConfig.collectAsStateWithLifecycle()
+    var seatUrl by remember(seatSaved) { mutableStateOf(seatSaved?.url.orEmpty()) }
+    var seatKey by remember(seatSaved) { mutableStateOf(seatSaved?.key.orEmpty()) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { vm.importExcel(it) } }
     val ctx = LocalContext.current
@@ -93,7 +96,7 @@ fun SettingsScreen(vm: AppViewModel) {
             Text("System switches automatically with your phone's light/dark setting. Your choice is remembered on this phone.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        SettingsSection(Icons.Filled.Link, "Connections", "Apps Script, Supabase & Save", expanded == "conn", { flip("conn") }) {
+        SettingsSection(Icons.Filled.Link, "Connections", "Apps Script, Seating, Supabase & Save", expanded == "conn", { flip("conn") }) {
             Text("Guest backend (Google Apps Script)", style = MaterialTheme.typography.titleSmall)
             OutlinedTextField(script, { script = it }, Modifier.fillMaxWidth(), label = { Text("Web app URL (…/exec)") })
             OutlinedTextField(key, { key = it }, Modifier.fillMaxWidth(), label = { Text("Admin key (ADMIN_KEY script property)") },
@@ -107,6 +110,15 @@ fun SettingsScreen(vm: AppViewModel) {
                 onClick = { vm.saveSettings(saved.copy(scriptUrl = script, adminKey = key, supabaseUrl = sbUrl, supabaseKey = sbKey, eventId = event)) },
                 modifier = Modifier.fillMaxWidth()
             ) { Text("Save & refresh") }
+            HorizontalDivider()
+            Text("Seating backend (Find your table script)", style = MaterialTheme.typography.titleSmall)
+            OutlinedTextField(seatUrl, { seatUrl = it }, Modifier.fillMaxWidth(), label = { Text("Seating web app URL (…/exec)") })
+            OutlinedTextField(seatKey, { seatKey = it }, Modifier.fillMaxWidth(), label = { Text("Seating admin key (ADMIN_KEY script property)") },
+                visualTransformation = PasswordVisualTransformation(), singleLine = true)
+            Button(
+                onClick = { vm.saveSeatingConfig(SeatingConfig(seatUrl.trim(), seatKey.trim())) },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Save seating connection") }
         }
 
         SettingsSection(Icons.Filled.Edit, "Message details", "Names and dates used in texts", expanded == "msg", { flip("msg") }) {

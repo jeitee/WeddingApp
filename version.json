@@ -1,6 +1,13 @@
 {
-  "versionCode": 2,
-  "versionName": "1.1",
+  "versionCode": 3,
+  "versionName": "1.2",
   "apkUrl": "https://github.com/jeitee/WeddingApp/releases/latest/download/weddingapp.apk",
-  "notes": "test new release"
+  "notes": "## What's new
+- New Tables tab to view and assign each guest's table.
+- Assignments save to your seating sheet, so the 'Find your table' page updates right away.
+- Search guests, browse all tables, and select several guests to seat them together.
+- New button that opens the 'Find your table' guest page.
+
+## Setup
+Open Settings > Connections and enter the seating web app URL and admin key under 'Seating backend'."
 }

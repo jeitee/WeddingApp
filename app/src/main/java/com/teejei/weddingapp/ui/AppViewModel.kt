@@ -280,6 +280,57 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         })
     }
 
+    /* ---------- Table assignments (separate seating Apps Script) ---------- */
+
+    val seatingConfig = TableStore.flow(app).state<SeatingConfig?>(null)   // null = still loading
+    val seatRows = MutableStateFlow<List<SeatEntry>?>(null)                  // null = not loaded yet
+    val seatingError = MutableStateFlow<String?>(null)
+    val seatingBusy = MutableStateFlow(false)
+
+    fun saveSeatingConfig(c: SeatingConfig) = viewModelScope.launch {
+        TableStore.save(getApplication<Application>().applicationContext, c)
+        toast("Seating connection saved")
+        loadSeating(c)
+    }
+
+    fun loadSeating(cfg: SeatingConfig? = seatingConfig.value) {
+        if (cfg == null) return
+        if (cfg.url.isBlank()) { seatRows.value = emptyList(); seatingError.value = null; return }
+        if (seatingBusy.value) return
+        viewModelScope.launch {
+            seatingBusy.value = true
+            SeatingApi.list(cfg).fold(
+                onSuccess = { seatRows.value = it; seatingError.value = null },
+                onFailure = { seatingError.value = it.friendly(); if (seatRows.value == null) seatRows.value = emptyList() }
+            )
+            seatingBusy.value = false
+        }
+    }
+
+    /** table blank = remove the table. Writes to the RSVP_Seats sheet through the seating script. */
+    fun assignTables(entries: List<SeatEntry>, table: String) = viewModelScope.launch {
+        val cfg = seatingConfig.value ?: return@launch
+        if (seatingBusy.value || entries.isEmpty()) return@launch
+        seatingBusy.value = true
+        val t = table.trim()
+        val result = SeatingApi.assign(cfg, entries, t)
+        seatingBusy.value = false
+        result.fold(
+            onSuccess = { r ->
+                seatRows.value = seatRows.value?.map { e -> if (e.row in r.updated) e.copy(table = t) else e }
+                toast(
+                    when {
+                        r.skipped > 0 -> "${r.updated.size} saved, ${r.skipped} changed in the sheet meanwhile. Reloaded."
+                        t.isBlank() -> "Removed table from ${r.updated.size} guest(s)"
+                        else -> "Assigned ${r.updated.size} guest(s) to table $t"
+                    }
+                )
+                if (r.skipped > 0) loadSeating(cfg)
+            },
+            onFailure = { toast("Couldn't save: ${it.friendly()}") }
+        )
+    }
+
     fun exportExcel(uri: Uri) = viewModelScope.launch {
         val result = withContext(Dispatchers.IO) {
             runCatching { GuestExporter.export(getApplication(), uri, guests.value) }

@@ -64,6 +64,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
     val tabs = listOf(
         Tab("dashboard", "Dashboard", Icons.Filled.Dashboard),
         Tab("guests", "Guests", Icons.Filled.People),
+        Tab("tables", "Tables", Icons.Filled.TableRestaurant),
         Tab("memories", "Memories", Icons.Filled.PhotoLibrary)
     )
     val entry by nav.currentBackStackEntryAsState()
@@ -76,6 +77,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
 
     val (title, subtitle, icon) = when (route) {
         "guests" -> Triple("Guests", "${guests.size} guest groups · invitations & RSVPs", Icons.Filled.People)
+        "tables" -> Triple("Tables", "Seating assignments", Icons.Filled.TableRestaurant)
         "memories" -> Triple("Memories", "${media.size} photos & videos from your guests", Icons.Filled.PhotoLibrary)
         "settings" -> Triple("Settings", "Connections, import & preferences", Icons.Filled.Settings)
         else -> Triple("Dashboard", "Your wedding at a glance", Icons.Filled.Dashboard)
@@ -116,6 +118,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 NavHost(nav, startDestination = "dashboard") {
                     composable("dashboard") { DashboardScreen(vm) }
                     composable("guests") { GuestsScreen(vm) { nav.navigate("settings") } }
+                    composable("tables") { TablesScreen(vm) { nav.navigate("settings") } }
                     composable("memories") { MemoriesScreen(vm) }
                     composable("settings") { SettingsScreen(vm) }
                 }
