@@ -139,6 +139,19 @@ class Repository(private val ctx: Context) {
             .getOrElse { e -> throw IllegalStateException("Saved on this device only: ${e.friendly()} It will sync on the next refresh.") }
     }
 
+    /** Online-only: ask the backend first, then update the local copy. Nothing is saved if the push fails. */
+    suspend fun setMaxPax(token: String, maxPax: Int): Result<Unit> = runCatching {
+        val g = dao.guest(token) ?: error("Guest not found.")
+        val s = settings.current()
+        requireScript(s)
+        val r = script.setSent(
+            s.scriptUrl,
+            body(mapOf("action" to "admin_set_max_pax", "key" to s.adminKey, "token" to token, "max_pax" to maxPax))
+        )
+        if (r.status != "success") error(r.message ?: "Server rejected the update.")
+        dao.upsertGuest(g.copy(maxPax = maxPax))
+    }.recoverCatching { e -> throw IllegalStateException("Couldn't update seats: ${e.friendly()}") }
+
     /* ================= Excel import ================= */
 
     private fun Map<String, String>.pick(vararg keys: String): String =

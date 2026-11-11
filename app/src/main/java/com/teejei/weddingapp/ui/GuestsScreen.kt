@@ -46,6 +46,7 @@ fun GuestsScreen(vm: AppViewModel, onOpenSettings: () -> Unit) {
     val error by vm.guestError.collectAsStateWithLifecycle()
     val refreshing by vm.refreshing.collectAsStateWithLifecycle()
     var dialogFor by remember { mutableStateOf<Guest?>(null) }
+    var seatsFor by remember { mutableStateOf<Guest?>(null) }
 
     Column(Modifier.fillMaxSize()) {
         OutlinedTextField(
@@ -81,10 +82,12 @@ fun GuestsScreen(vm: AppViewModel, onOpenSettings: () -> Unit) {
                     Text("${guests.size} of ${all.size} guest groups", style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                items(guests, key = { it.token }) { g -> GuestCard(g, vm) { dialogFor = g } }
+                items(guests, key = { it.token }) { g -> GuestCard(g, vm, onEditSeats = { seatsFor = g }) { dialogFor = g } }
             }
         }
     }
+
+    seatsFor?.let { g -> SeatsDialog(g, onDismiss = { seatsFor = null }) { n -> vm.setMaxPax(g, n); seatsFor = null } }
 
     dialogFor?.let { g -> SentDialog(g, onDismiss = { dialogFor = null }) { sent, notes -> vm.setSent(g, sent, notes); dialogFor = null } }
 }
@@ -117,7 +120,7 @@ private fun FilterBar(f: GuestFilter, vm: AppViewModel) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun GuestCard(g: Guest, vm: AppViewModel, onMark: () -> Unit) {
+private fun GuestCard(g: Guest, vm: AppViewModel, onEditSeats: () -> Unit, onMark: () -> Unit) {
     val ctx = LocalContext.current
     val clipboard = LocalClipboardManager.current
     var expanded by remember { mutableStateOf(false) }
@@ -168,6 +171,7 @@ private fun GuestCard(g: Guest, vm: AppViewModel, onMark: () -> Unit) {
             IconButton(enabled = usable, onClick = { openUrl(ctx, g.url) { vm.toast("No browser found") } }) {
                 Icon(Icons.Filled.OpenInBrowser, "Open invitation in browser")
             }
+            IconButton(onClick = onEditSeats) { Icon(Icons.Filled.Edit, "Edit number of seats") }
             Spacer(Modifier.weight(1f))
             if (g.invitationSent) OutlinedButton(onClick = onMark) { Text("Mark not sent") }
             else FilledTonalButton(onClick = onMark) { Text("Mark as sent") }
@@ -188,6 +192,36 @@ private fun GuestCard(g: Guest, vm: AppViewModel, onMark: () -> Unit) {
             }
         }
     }
+}
+
+@Composable
+private fun SeatsDialog(g: Guest, onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
+    var text by remember { mutableStateOf(g.maxPax.toString()) }
+    val n = text.toIntOrNull()
+    val minSeats = maxOf(1, g.confirmedSeats + g.declinedSeats)
+    val valid = n != null && n >= minSeats && n <= 99
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit seats for ${g.groupName}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = text, onValueChange = { v -> text = v.filter { it.isDigit() }.take(2) },
+                    label = { Text("Number of seats (max pax)") }, singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
+                    isError = !valid
+                )
+                Text(
+                    "Currently ${g.maxPax}. Minimum $minSeats (seats already confirmed or declined).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = { TextButton(enabled = valid, onClick = { onConfirm(n!!) }) { Text("Save") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 @Composable

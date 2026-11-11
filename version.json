@@ -1,13 +1,19 @@
 {
-  "versionCode": 3,
-  "versionName": "1.2",
+  "versionCode": 4,
+  "versionName": "1.3",
   "apkUrl": "https://github.com/jeitee/WeddingApp/releases/latest/download/weddingapp.apk",
-  "notes": "## What's new
-- New Tables tab to view and assign each guest's table.
-- Assignments save to your seating sheet, so the 'Find your table' page updates right away.
-- Search guests, browse all tables, and select several guests to seat them together.
-- New button that opens the 'Find your table' guest page.
+  "notes": "What’s new
 
-## Setup
-Open Settings > Connections and enter the seating web app URL and admin key under 'Seating backend'."
+You can now change the number of seats (max pax) for any guest group straight from the Guests screen. Tap the Edit (pencil) icon on a guest card, enter the new number, and save.
+
+How it works
+
+The new seat count is sent to the Apps Script backend first, and the app updates its local copy only after the backend accepts it. If the update fails (for example, you’re offline), nothing is saved, and you’ll see a clear error message.
+The minimum allowed value is the number of seats already confirmed or declined for that group (and at least 1), so you can’t reduce seats below existing RSVP responses. The maximum is 99.
+The dialog shows the current seat count and the minimum allowed.
+
+Notes
+
+Changing seats requires an internet connection and the Admin key set in Settings.
+Your Apps Script must support the admin_set_max_pax action. Redeploy the latest version of the script before using this feature."
 }

@@ -19,7 +19,7 @@ object Defaults {
 
     // qr-script.js
     const val SUPABASE_URL = "https://jwixdwokeguliuwbwbqs.supabase.co"
-    const val ADMIN_KEY  = "iFoundJudithMariePerezLomibaoDeCelis022323"
+        const val ADMIN_KEY  = "iFoundJudithMariePerezLomibaoDeCelis022323"
     const val SUPABASE_KEY = "sb_publishable_LN5IZzt80pI20i8W4kT-4g_BkEEKlss"
     const val EVENT_ID = "teejei-judith"
 }

@@ -137,6 +137,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    fun setMaxPax(g: Guest, maxPax: Int) = viewModelScope.launch {
+        repo.setMaxPax(g.token, maxPax).fold(
+            onSuccess = { toast("Seats for ${g.groupName.ifBlank { "this group" }} set to $maxPax") },
+            onFailure = { toast(it.message ?: "Could not update seats") }
+        )
+    }
+
     fun saveSettings(s: AppSettings) = viewModelScope.launch {
         repo.settings.save(s); toast("Settings saved"); refresh()
     }
